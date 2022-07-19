@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using StackExchange.Redis;
 
 namespace DemoNothing.Controllers;
 
@@ -14,21 +15,39 @@ public class WeatherForecastController : ControllerBase
     };
 
     private readonly ILogger<WeatherForecastController> _logger;
+    private readonly IConnectionMultiplexer _redis;
 
-    public WeatherForecastController(ILogger<WeatherForecastController> logger)
+    public WeatherForecastController(
+        ILogger<WeatherForecastController> logger,
+        IConnectionMultiplexer redis)
     {
         _logger = logger;
+        _redis = redis;
     }
 
     [HttpGet(Name = "GetWeatherForecast")]
     public IEnumerable<WeatherForecast> Get()
     {
-        return Enumerable.Range(1, 5).Select(index => new WeatherForecast
+        var db = _redis.GetDatabase();
+        var redisCachedResult = db.StringGet("myweather");
+
+        if (!redisCachedResult.HasValue)
+        {
+            var result = Enumerable.Range(1, 5).Select(index => new WeatherForecast
             {
                 Date = DateTime.Now.AddDays(index),
                 TemperatureC = Random.Shared.Next(-20, 55),
                 Summary = Summaries[Random.Shared.Next(Summaries.Length)]
-            })
-            .ToArray();
+            });
+
+            var resultSerialized = System.Text.Json.JsonSerializer.Serialize(result);
+
+            db.StringSet("myweather", resultSerialized);
+            db.KeyExpire("myweather", DateTime.UtcNow.AddMinutes(3));
+
+            return result;
+        }
+
+        return System.Text.Json.JsonSerializer.Deserialize<IEnumerable<WeatherForecast>>(redisCachedResult);
     }
 }
